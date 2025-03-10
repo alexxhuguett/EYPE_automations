@@ -1,0 +1,186 @@
+function onFormSubmit(e) {
+  const TEMPLATE_ID = 'XXX';  // template's file ID
+
+  let responses = getFormArrayFromLastEntry();
+
+  // value based on the order in the form
+  const uni = responses[0];
+  const prefijo = responses[1];
+  const nombre = responses[2];
+  const tipodoc = responses[3];
+  const numdoc = responses[4];
+  const nombreevento = responses[5];
+  const rol = responses[6];
+  const ciudad = responses[7];
+  const diaempieza = responses[8];
+  const mesempieza = responses[9];
+  const diaacaba = responses[10];
+  const mesacaba = responses[11];
+  const fechahoy = responses[12];
+  const email = responses[13];
+
+  // debugging
+  Logger.log("University: " + uni);
+  Logger.log("Name: " + nombre);
+  Logger.log("Email: " + email);
+
+  // send the email
+
+  const docCopy = DriveApp.getFileById(TEMPLATE_ID).makeCopy();
+  const docId = docCopy.getId();
+  Logger.log("New document copy created with ID: " + docId); // check document creation
+  const doc = DocumentApp.openById(docId);
+  const body = doc.getBody();
+  
+  body.replaceText('{{name}}', nombre);
+  body.replaceText('{{email}}', email);
+  body.replaceText('{{UniversidadColegio}}', uni);
+  body.replaceText('{{mrmrs}}', prefijo);
+  body.replaceText('{{documenttype}}', tipodoc);
+  body.replaceText('{{number}}', numdoc);
+  body.replaceText('{{nameofevent}}', nombreevento);
+  body.replaceText('{{role}}', rol);
+  body.replaceText('{{city}}', ciudad);
+  body.replaceText('{{daystart}}', diaempieza);
+  body.replaceText('{{monthstart}}', mesempieza);
+  body.replaceText('{{dayend}}', diaacaba);
+  body.replaceText('{{monthend}}', mesacaba);
+  body.replaceText('{{todaydate}}', fechahoy);
+  doc.setName(`Attendance letter for ${nombre}`);
+
+  doc.saveAndClose();
+  
+  try {
+    const destinationFolder = DriveApp.getFolderById('XXX');
+    Logger.log("Destination folder name: " + destinationFolder.getName());
+    docCopy.moveTo(destinationFolder);
+    Logger.log("Document moved successfully to the folder.");
+  } catch (error) {
+    Logger.log("Error moving document: " + error.message);
+  }
+
+
+  const pdf = DriveApp.getFileById(docId).getAs('application/pdf');
+  const subject = `Assistance Letter ${nombreevento}`;
+  const message = `Hi ${nombre},\n\nHere is your assistance letter regarding "${nombreevento}" happenning between ${diaempieza} ${mesempieza} and ${diaacaba} ${mesacaba}.\n\nAlejandro Huguet
+
+IT Manager, Officer VPIA
+European Youth Parliament España
+
+European Youth Parliament España – Spain
+www.eype.es | info@eype.es `;
+  
+  MailApp.sendEmail({
+    to: email,
+    subject: subject,
+    body: message,
+    attachments: [pdf]
+  });
+  
+  //DriveApp.getFileById(docId).setTrashed(true);
+}
+
+
+function sendApprovalRequest(nombre, rol, nombreevento) {
+  const adminEmail = "email";
+  const scriptUrl = "XXX"; // Reemplázalo con tu URL real
+
+  const approveLink = `${scriptUrl}?action=approve&row=${rowNumber}`;
+  const rejectLink = `${scriptUrl}?action=reject&row=${rowNumber}`;
+
+  const subject = `Solicitud de aprobación - Carta de asistencia para ${nombre}`;
+  const message = `Hola Alejandro,
+
+Se ha solicitado una carta de asistencia para el evento "${nombreevento}".
+
+Nombre: ${nombre}
+Rol: ${rol}
+
+¿Quieres aprobar la solicitud?
+
+[Aprobar](${approveLink})
+[Denegar](${rejectLink})`;
+
+  MailApp.sendEmail({
+    to: adminEmail,
+    subject: subject,
+    body: message
+  });
+  
+  return false; // Espera una acción externa antes de continuar
+}
+
+function handleApprovalResponse(e) {
+  const params = e.parameter;
+  const rowNumber = parseInt(params.row);
+  const action = params.action;
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetById("XXX");
+  const statusCell = sheet.getRange(rowNumber, 1);
+  
+  if (action === "approve") {
+    statusCell.setValue("Aprobado");
+    const rowData = sheet.getRange(rowNumber, 1, 1, sheet.getLastColumn()).getValues()[0];
+    generateAttendanceLetter(rowData);
+    return ContentService.createTextOutput("Solicitud aprobada. Se ha generado la carta.");
+  } else {
+    statusCell.setValue("Denegado");
+    return ContentService.createTextOutput("Solicitud denegada.");
+  }
+}
+
+
+function getFormArrayFromLastEntry() {
+  const id = 'XXX';
+  const form = FormApp.openById(id);
+  const responses = form.getResponses()
+  Logger.log(responses[responses.length -1]);
+  const response = responses[responses.length -1];
+  const items = response.getItemResponses();
+  let responsesarray = [];
+  let i = 0;
+  items.forEach(item => {
+    const answer = item.getResponse();
+    Logger.log(answer)
+    responsesarray[i] = answer;
+    i = i + 1;
+  })
+  return responsesarray;
+}
+
+
+function testAccess() {
+  const TEMPLATE_ID = 'XXX';  // Replace with your template's file ID
+  const file = DriveApp.getFileById(TEMPLATE_ID);
+  
+  if (file) {
+    Logger.log("Template file found: " + file.getName());
+  } else {
+    Logger.log("Template file not found or inaccessible.");
+  }
+}
+
+
+function testFormSubmit() {
+  // Simulate a form submission with test data
+  const e = {
+    values: [
+      "Test University",   // Universidad/colegio
+      "Mr.",               // Prefijo
+      "John Doe",          // Nombre
+      "ID",                // Tipo de documento
+      "123456789",         // Numero del documento
+      "Event X",           // Nombre del evento
+      "Speaker",           // Rol
+      "City Y",            // Ciudad
+      "15",                // Dia que empieza la sesión
+      "Octubre",           // Mes que empieza la sesión
+      "20",                // Día que acaba la sesión
+      "Octubre",           // Mes que acaba la sesión
+      "24/10/2024",        // Fecha de hoy
+      "xxx@gmail.com"   // Email
+    ]
+  };
+  
+  //onFormSubmit(e);  // Call the original form submission function with this test data
+}
