@@ -1,0 +1,297 @@
+/*******************************************************
+ * CONFIGURACIÓN CENTRAL
+ *******************************************************/
+const CONFIG = {
+  SPREADSHEET_ID: "1XeqV8HXhpB66FNuXlI3s_Wj3KkXjwpBoDw3WUIqZBQM",   // Hoja de respuestas
+  SHEET_TAB_NAME: "Respuestas",
+  TEMPLATE_ID: "1w9us6yF5JAjvt0aDf7vfom12uFodeLlK",                 // Plantilla Docs
+  DESTINATION_FOLDER_ID: "1RB1cFsHN2GxH_kdXcv676pswJ1W8aDFB",        // Carpeta destino PDFs
+  PRESIDENT_EMAIL: "a.huguet@eype.es"                               // Email del presidente
+};
+
+/*******************************************************
+ * FLUJO PRINCIPAL: disparado al enviar Form
+ *******************************************************/
+function onFormSubmit(e) {
+
+  const sheet = getSheet();
+  const lastRow = sheet.getLastRow();
+
+  // Estado inicial: Pending
+  sheet.getRange(lastRow, 1).setValue("Pending");
+
+  // Fecha hoy en columna M (12)
+  const fechaHoy = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+  sheet.getRange(lastRow, 12).setValue(fechaHoy);
+
+  // Datos de la fila
+  const rowData = sheet.getRange(lastRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const fullName = rowData[1];
+  const prefix = rowData[2];
+  const university = rowData[3];
+  const documentType = rowData[4];
+  const documentNumber = rowData[5];
+  const role = rowData[6];
+  const city = rowData[7];
+  const startDate = rowData[8];
+  const endDate = rowData[9];
+  const email = rowData[10];
+
+  // debugging
+  Logger.log("University: " + university);
+  Logger.log("Name: " + fullName);
+  Logger.log("Email: " + email);
+  Logger.log("Role: " + role);
+
+
+
+  // URLs de aprobación/denegación
+  const scriptUrl = ScriptApp.getService().getUrl();
+  const approveUrl = `${scriptUrl}?action=approve&row=${lastRow}`;
+  const denyUrl   = `${scriptUrl}?action=deny&row=${lastRow}`;
+
+  // Aviso al presidente
+  const subject = `Solicitud de Attendance Letter: ${fullName}`;
+  const body =
+    `El participante ${fullName} (${email}) ha solicitado un attendance letter.\n\n` +
+    `📌 Detalles:\n` +
+    `Nombre: ${prefix} ${fullName}\n` +
+    `Universidad: ${university}\n` +
+    `Documento: ${documentType} ${documentNumber}\n` +
+    `Rol: ${role}\n` +
+    `Ciudad: ${city}\n` +
+    `Fechas: ${startDate} → ${endDate}\n\n` +
+    `👉 Selecciona una opción:\n` +
+    `Aprobar: ${approveUrl}\n` +
+    `Denegar: ${denyUrl}`;
+
+  MailApp.sendEmail(CONFIG.PRESIDENT_EMAIL, subject, body);
+
+  //buildAndSend(rowData);
+
+}
+
+/*******************************************************
+ * ENDPOINT WEB: aprobación o denegación
+ *******************************************************/
+function doGet(e) {
+  const sheet = getSheet();
+  const row = parseInt(e.parameter.row, 10);
+  const action = e.parameter.action;
+
+  if (!row || !action)
+    return ContentService.createTextOutput("Error: parámetros inválidos.");
+
+  if (action === "approve") {
+    sheet.getRange(row, 1).setValue("Approved");
+    buildAndSend(row);
+    return ContentService.createTextOutput("✅ Solicitud aprobada y PDF enviado.");
+  } else if (action === "deny") {
+    sheet.getRange(row, 1).setValue("Denied");
+    return ContentService.createTextOutput("❌ Solicitud denegada.");
+  }
+  return ContentService.createTextOutput("⚠ Acción no reconocida.");
+}
+
+/*******************************************************
+ * GENERAR Y ENVIAR PDF (mezcla de ambos scripts)
+ *******************************************************/
+function buildAndSend(row) {
+  // Build and send the email
+
+  // Extrae los valores del google sheets
+  const sheet = getSheet();
+  const rowData = sheet.getRange(lastRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+  // Asigna los valores
+  const fullName = rowData[1];
+  const prefix = rowData[2];
+  // const university = rowData[3];
+  const documentType = rowData[4];
+  const documentNumber = rowData[5];
+  const role = rowData[6];
+  const city = rowData[7];
+  const startDate = new Date(rowData[8]);
+  const endDate   = new Date(rowData[9]);
+  const email = rowData[10];
+
+  const processed = processDates(startDate, endDate);
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+
+  const docCopy = DriveApp.getFileById(CONFIG.TEMPLATE_ID).makeCopy();
+  const docId = docCopy.getId();
+  Logger.log("New document copy created with ID: " + docId); // check document creation
+  const doc = DocumentApp.openById(docId);
+  const body = doc.getBody();
+  
+  body.replaceText('{{name}}', fullName);
+  body.replaceText('{{email}}', email);
+  // body.replaceText('{{university}}', university);
+  body.replaceText('{{prefix}}', prefix);
+  body.replaceText('{{documenttype}}', documentType);
+  body.replaceText('{{number}}', documentNumber);
+  //body.replaceText('{{nameofevent}}', 'Euro-Mediterranean Youth Summit 2025'); // cambia si quieres sacarlo del sheet
+  body.replaceText('{{role}}', role);
+  body.replaceText('{{city}}', city);
+  body.replaceText('{{daystart}}', processed.startDay);
+  body.replaceText('{{monthstart}}', processed.startMonthYear);
+  body.replaceText('{{dayend}}', processed.endDay);
+  body.replaceText('{{monthend}}', processed.endMonthYear);
+  body.replaceText('{{todaydate}}', todayDate);
+
+  doc.setName(`Attendance Letter - ${fullName}`);
+  doc.saveAndClose();
+
+  try {
+    const destinationFolder = DriveApp.getFolderById('CONFIG.FOLDER_ID');
+    Logger.log("Destination folder name: " + destinationFolder.getName());
+    docCopy.moveTo(destinationFolder);
+    Logger.log("Document moved successfully to the folder.");
+  } catch (error) {
+    Logger.log("Error moving document: " + error.message);
+  }
+
+
+  // Generar PDF y enviar al participante
+  const pdf = DriveApp.getFileById(docId).getAs("application/pdf");
+  const subject = `Your Attendance Letter - ${fullName}`;
+  const message =
+    `Dear ${fullName},\n\nAttached is your attendance letter.\n\nAlejandro Huguet
+
+IT Manager
+European Youth Parliament España
+
+European Youth Parliament España – Spain
+www.eype.es | info@eype.es `;
+  
+  MailApp.sendEmail({
+    to: email,
+    subject: subject,
+    body: message,
+    attachments: [pdf]
+  });
+  
+  //DriveApp.getFileById(docId).setTrashed(true);
+}
+
+
+function testBuildAndSendFull() {
+  // Simulate a row from your Google Sheet
+  const testRow = [
+    1,                      // Col A: ID
+    "John Doe",             // Col B: Full Name
+    "Mr.",                  // Col C: Prefix
+    "University X",         // Col D: University (optional, unused)
+    "Participation",        // Col E: Document Type
+    "12345678",             // Col F: Document Number
+    "Speaker",              // Col G: Role
+    "Málaga",               // Col H: City
+    "2025-10-15",           // Col I: Start Date
+    "2025-10-20",           // Col J: End Date
+    "a.huguet@eype.es"// Col K: Email (replace with test email)
+  ];
+
+  // Call the real function
+  buildAndSendTestEnv(testRow);
+}
+
+function buildAndSendTestEnv(rowData) {
+  const fullName = rowData[1];
+  const prefix = rowData[2];
+  const documentType = rowData[4];
+  const documentNumber = rowData[5];
+  const role = rowData[6];
+  const city = rowData[7];
+  const startDate = new Date(rowData[8]);
+  const endDate   = new Date(rowData[9]);
+  const email = rowData[10];
+
+  const processed = processDates(startDate, endDate);
+  const todayDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+
+/*
+  // Create a copy of the template
+  const docCopy = DriveApp.getFileById(CONFIG.TEMPLATE_ID).makeCopy();
+  // Move to test folder
+  const destinationFolder = DriveApp.getFolderById(CONFIG.FOLDER_ID); // replace with your test folder ID
+  docCopy.moveTo(destinationFolder);
+*/
+
+  const docCopy = DriveApp.getFileById(CONFIG.TEMPLATE_ID).makeCopy();
+  const docId = docCopy.getId();
+  Logger.log("New document copy created with ID: " + docId); // check document creation
+
+
+
+  Utilities.sleep(25000); // 3 second pause
+
+  function openDocWithRetry(docId, maxRetries = 5, delayMs = 1000) {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return DocumentApp.openById(docId);
+      } catch (e) {
+        Logger.log(`Intento ${i + 1} fallido: ${e.message}`);
+        Utilities.sleep(delayMs);
+      }
+    }
+    throw new Error("No se pudo abrir el documento después de varios intentos.");
+  }
+
+  // Uso:
+  const doc = openDocWithRetry(docId);
+
+  //const doc = DocumentApp.openById(docId);
+  const body = doc.getBody();
+
+  try {
+    const destinationFolder = DriveApp.getFolderById(CONFIG.DESTINATION_FOLDER_ID);
+    Logger.log("Destination folder name: " + destinationFolder.getName());
+    docCopy.moveTo(destinationFolder);
+    Logger.log("Document moved successfully to the folder.");
+  } catch (error) {
+    Logger.log("Document not moved.");
+    Logger.log("Error moving document: " + error.message);
+  }
+
+  body.replaceText('{{name}}', fullName);
+  body.replaceText('{{email}}', email);
+  body.replaceText('{{prefix}}', prefix);
+  body.replaceText('{{documenttype}}', documentType);
+  body.replaceText('{{number}}', documentNumber);
+  body.replaceText('{{role}}', role);
+  body.replaceText('{{city}}', city);
+  body.replaceText('{{daystart}}', processed.startDay);
+  body.replaceText('{{monthstart}}', processed.startMonthYear);
+  body.replaceText('{{dayend}}', processed.endDay);
+  body.replaceText('{{monthend}}', processed.endMonthYear);
+  body.replaceText('{{todaydate}}', todayDate);
+
+  doc.setName(`Attendance Letter - ${fullName}`);
+  doc.saveAndClose();
+
+  // Generate PDF and send email
+  const pdf = DriveApp.getFileById(docId).getAs("application/pdf");
+  const subject = `Your Attendance Letter - ${fullName}`;
+  const message = `
+Dear ${fullName},
+
+Attached is your attendance letter.
+
+Alejandro Huguet
+IT Manager
+European Youth Parliament España
+
+European Youth Parliament España – Spain
+www.eype.es | info@eype.es`;
+
+  MailApp.sendEmail({
+    to: email,
+    subject: subject,
+    body: message,
+    attachments: [pdf]
+  });
+
+  Logger.log("Test email sent to: " + email);
+}
+
+
